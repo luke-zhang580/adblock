@@ -1,0 +1,1721 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  Egern 去广告模块 · 应用合集                                                 ║
+# ║  百度贴吧 / 起点读书 / 抖音 / 闲鱼 / 美团 / 腾讯视频 / 小红书                     ║
+# ║  哔哩哔哩 / 高德地图 / 盒马 / 京东 / 中国移动 / 虎牙直播 / 斗鱼直播                  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# ▎Surge 版本
+#   Surge_AdBlock_Module.sgmodule（14 款合集）与 Surge_Modules/*.sgmodule（分应用，可单独开关）由本文件逐条转换生成，
+#   规则 / 重写 / jq / 脚本与本文件保持一致。改动请以本文件为准，然后在仓库根目录执行
+#     pip install -r tools/requirements.txt   （首次）
+#     python tools/gen_surge.py --check       （重新生成 Surge 文件并校验；新增应用需先在脚本的 APPS / FILE / KEYS 登记）
+#
+# ▎使用方法
+#   1. 把本文件放到可访问的地址（GitHub raw / 自己的服务器 / Egern 本地文件）
+#   2. Egern → 工具 → 模块 → 添加 → 填入文件地址
+#   3. 设置 → MITM → 生成 CA 证书 → 安装并在「设置-通用-关于本机-证书信任设置」里开启信任
+#   4. 部分 App 需要清缓存或重装后才会生效
+#
+# ▎单独开关（核心需求）
+#   每个应用都有一个 *_disabled 参数：false = 开启过滤（默认），true = 关闭过滤
+#   方式 A：Egern → 模块详情页 → 参数，直接修改
+#   方式 B：在主配置 modules 里覆盖，例如：
+#     modules:
+#       - name: 应用去广告合集
+#         url: https://your.host/Egern_AdBlock_Module.yaml
+#         compat_arguments:
+#           douyin_disabled: true          # 关闭抖音过滤
+#           tieba_filter_video_thread: 1   # 贴吧推荐页同时过滤视频帖
+#
+# ▎注意
+#   - 关闭某个应用的开关后，它的 规则/重写/脚本 全部停用，但 MITM 域名仍在列表中（无副作用，仅多一次解密）
+#     若某 App 出现无法加载、证书报错，请直接把它的域名从底部 mitm.hostnames 中删掉
+#   - 抖音默认【不做 MITM】：解密 api*.amemv.com / aweme*.snssdk.com 会让播放器的 /aweme/v1/play/ 等请求
+#     证书校验失败（播放器用的是自带 TLS 栈，不信任用户安装的 CA），表现为"播放视频时接口报错"。
+#     开屏 / 穿山甲 / DSP / 统计广告全部改为域名层拦截（ads*-normal-*.zijieapi.com、p*-ad-sign.byteimg.com 等），
+#     不解密也能生效且不影响播放；信息流内嵌广告由服务端混排且带签名校验，无 MITM 时无法去除（社区共识），
+#     想尝试的用户可通过 douyin_mitm_* 参数手动开启 MITM（见参数说明）
+#   - 腾讯视频规则（RuCu6）上游已停更，高版本客户端可能失效
+#   - 美团 / 美团外卖客户端有证书锁定，接口层无法 MITM；本模块只处理开屏素材 CDN、运营配置与广告/统计域名
+#   - 哔哩哔哩的推荐 / 动态 / 播放页广告走 gRPC（HTTP/2），依赖 kokoryh 的 ProtoBuf 脚本与 Egern 的 h2 MITM；
+#     为迫使客户端走可解密域名，模块会拦截 api/app.biliapi.com|net 备用域、HTTPDNS 以及 dns.google（防 DoH 绕过）
+#   - 中国移动 App 的开屏 / 营销接口因省份不同而异，模块覆盖了全国版 + 广东 / 山东 / 江苏三省，其它省份如仍有开屏请反馈接口
+#   - 虎牙主接口为 WUP 二进制协议，只能拦开屏素材 / 广告投放 / 统计域名（fmz200 亦标注无法完全去广告）；斗鱼的脚本逻辑已全部改写为 jq
+#   - 闲鱼 / 起点 / 贴吧 的 JSON 接口全部用 Egern 原生 jq 处理，不依赖第三方脚本；
+#     只有 贴吧 ProtoBuf（app2smile）和 小红书 信息流/水印（fmz200）两处使用 GitHub 上的脚本，
+#     且已固定到审计过的 commit（见 scriptings 段说明）
+#
+# ▎规则来源与交叉验证（2026-11-07）
+#   - 域名类 REJECT 规则逐条比对了 3 个独立维护的广告列表：blackmatrix7 Advertising(Reject.yaml) / 秋风 AWAvenue / AdGuard DNS filter，
+#     并用 lingeringsound 10007 白名单反查误杀；只有 ≥2 个来源或语义明确（如 mads / impdsp）的域名才保留
+#   - 开屏接口比对了 app2smile（贴吧原作者）、kelee、fmz200、blackmatrix7、NobyDa、ddgksf2013、deezertidal、ihxperfect、
+#     zwf234、GFBG-IT、zqzess、syttys 等 12 份规则，取交集/并集后写入，单一来源且用途不明的已剔除
+#   - 本模块所有 url_rewrites 的 location 只会是 http://reject*/ 内置空响应，不会跳转到任何第三方地址
+#
+# ▎参考项目（规则与脚本来源，感谢原作者）
+#   - 可莉 iKeLee  https://github.com/luestr/ProxyResource  （经 https://github.com/QingRex/LoonKissSurge 转换）
+#   - 奶思 fmz200  https://github.com/fmz200/wool_scripts
+#   - app2smile    https://github.com/app2smile/rules        （贴吧 ProtoBuf 脚本）
+#   - 墨鱼 ddgksf2013 https://github.com/ddgksf2013/Rewrite
+#   - RuCu6        腾讯视频 / 小红书 原始规则
+#   - Egern 官方模块文档 https://egernapp.com/zh-CN/docs/configuration/modules
+#
+# ▎语法速查（Egern 原生写法）
+#   url_rewrites  location 特殊值：http://reject/ (404) · http://reject-200/ · http://reject-dict/ ({})
+#                                  http://reject-array/ ([]) · http://reject-img/ (1x1 gif) · http://reject-video/
+#   body_rewrites response_jq 使用 jq 表达式直接改 JSON，无需脚本
+#   scriptings    http_response 兼容 Surge/Loon 脚本，$argument 通过 arguments._compat.$argument 传入
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: "应用去广告合集"
+description: "百度贴吧 / 起点读书 / 抖音 / 闲鱼 / 美团 / 腾讯视频 / 小红书 / 哔哩哔哩 / 高德地图 / 盒马 / 京东 / 中国移动 / 虎牙 / 斗鱼 去广告。可在参数中单独开关每个应用（*_disabled: true 为关闭）。需开启 MITM。"
+author: "Thomas"
+homepage: "https://egernapp.com/zh-CN/docs/configuration/modules"
+icon: "shield.lefthalf.filled"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 参数（开关）
+# ──────────────────────────────────────────────────────────────────────────────
+compat_arguments:
+  # ===== 各应用过滤开关：false = 开启过滤 / true = 关闭过滤 =====
+  tieba_disabled: false            # 百度贴吧
+  qidian_disabled: false           # 起点读书
+  douyin_disabled: false           # 抖音（开屏 / 联盟广告 / 统计上报）
+  xianyu_disabled: false           # 闲鱼
+  meituan_disabled: false          # 美团 / 美团外卖
+  tencent_video_disabled: false    # 腾讯视频
+  xiaohongshu_disabled: false      # 小红书
+  bilibili_disabled: false         # 哔哩哔哩（开屏 / 推荐流 / 动态 / 播放页 / 评论 / 搜索广告，含 P2P 屏蔽）
+  amap_disabled: false             # 高德地图
+  hema_disabled: false             # 盒马
+  jd_disabled: false               # 京东
+  chinamobile_disabled: false      # 中国移动（含广东 / 山东 / 江苏分省接口）
+  huya_disabled: false             # 虎牙直播（开屏 / 广告素材 / 统计；信息流为 WUP 二进制协议无法处理）
+  douyu_disabled: false            # 斗鱼直播（开屏 / 首页轮播与视频流广告 / 直播间悬浮窗 / P2P）
+  # ===== 细项 =====
+  tieba_filter_video_thread: 0        # 贴吧推荐页是否同时过滤视频帖：0 否 / 1 是
+  # ----- 抖音 MITM（默认关闭）-----
+  # 解密 api*.amemv.com / aweme*.snssdk.com 后，抖音播放器请求 /aweme/v1/play/ 等接口会因证书校验失败而报错、视频无法播放。
+  # 因此抖音默认只做「域名层」拦截（开屏 / 穿山甲 / DSP / 统计），不解密任何抖音域名，播放不受影响。
+  # 仍想尝试 MITM（部分旧版本客户端可用）：把下面三项改为 false / 对应域名即可。
+  douyin_mitm_disabled: true                       # 抖音 MITM 相关规则总开关（QUIC 禁用 + URL 重写）
+  douyin_mitm_host_1: "douyin-mitm-off.invalid"    # 开启 MITM 时改为 "api*.amemv.com"
+  douyin_mitm_host_2: "douyin-mitm-off.invalid"    # 开启 MITM 时改为 "aweme*.snssdk.com"
+  douyin_feed_filter_disabled: true                # 抖音信息流 jq 过滤（实验性，依赖上面的 MITM，默认关闭）
+
+compat_arguments_desc: |
+  ▸ *_disabled：每个应用的独立开关。false = 开启过滤（默认），true = 关闭该应用的全部规则/重写/脚本。
+    tieba_disabled / qidian_disabled / douyin_disabled / xianyu_disabled / meituan_disabled /
+    tencent_video_disabled / xiaohongshu_disabled / bilibili_disabled / amap_disabled /
+    hema_disabled / jd_disabled / chinamobile_disabled / huya_disabled / douyu_disabled
+  ▸ bilibili_disabled 同时控制 B 站 P2P（PCDN）端口与 dns.google 拦截：后者是为了阻止 B 站用 DoH 绕过本地 DNS，
+    若你的 DNS 上游恰好只有 dns.google，请改用其他上游或关闭 B 站过滤。
+  ▸ tieba_filter_video_thread：贴吧推荐页是否连视频帖一起过滤，0 否（默认）/ 1 是。
+  ▸ douyin_mitm_disabled：抖音 MITM 相关规则（QUIC 禁用、/api/ad/ 等 URL 重写）。默认 true（关闭）。
+    解密抖音 API 域名会导致视频播放接口报错，所以默认不解密；抖音广告仅靠域名拦截（开屏 / 穿山甲 / DSP / 统计）。
+  ▸ douyin_mitm_host_1 / douyin_mitm_host_2：要解密的抖音域名，默认为占位符（不解密）。
+    想试 MITM 时分别填 "api*.amemv.com" 与 "aweme*.snssdk.com"，并把 douyin_mitm_disabled 改为 false。
+  ▸ douyin_feed_filter_disabled：抖音信息流广告 jq 过滤，实验性，依赖 MITM，默认 true（关闭）。
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 分流规则（域名 / IP / 协议层拦截，不需要 MITM）
+# ──────────────────────────────────────────────────────────────────────────────
+rules:
+  # ───────── 百度贴吧 ─────────
+  # 开屏广告的 4 层拦截：
+  #   ① 开屏接口 c/f/ad/getSplashAd（JSON）→ 下方 jq 把 error_code 改为 2230209（app2smile / kelee / ZenmoFeiShi 一致做法，
+  #      不能直接 reject，否则影响启动流程）
+  #   ② 全局配置 c/s/sync 里的 home_screen_ad / ad_config / ad_adsense 等字段 → 下方 jq 删除
+  #   ③ 百度广告 SDK（百青藤 mobads / 网盟 cpro / afd / 统计）域名 → 本段 REJECT
+  #      以下域名均同时出现在 ≥2 个独立列表（blackmatrix7 Reject / 秋风 AWAvenue / AdGuard DNS filter）
+  #      注意：als.baidu.com 虽在广告列表中，但贴吧「签到」依赖它（多个白名单标注），故不拦截
+  #   ④ 旧版接口 c/s/splashSchedule、forum/getAdInfo → 下方 url_rewrites 兼容性拦截
+  - domain:
+      name: "贴吧 · 百度联盟广告"
+      match: afd.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百青藤移动广告"
+      match: mobads.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百青藤广告日志"
+      match: mobads-logs.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百青藤广告预配置"
+      match: mobads-pre-config.cdn.bcebos.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度网盟广告"
+      match: cpro.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度网盟广告静态资源"
+      match: cpro.baidustatic.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度 DUP 广告静态资源"
+      match: dup.baidustatic.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度广告位"
+      match: pos.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度广告点击统计"
+      match: nsclick.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度广告点击统计"
+      match: eclick.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - domain:
+      name: "贴吧 · 百度统计"
+      match: hm.baidu.com
+      policy: REJECT
+      disabled: {{{tieba_disabled}}}
+  - ip_cidr:
+      name: "贴吧 · 屏蔽百度 HTTPDNS（保证 MITM 生效；app2smile / kelee / fmz200 / ddgksf2013 一致）"
+      match: 180.76.76.200/32
+      policy: REJECT
+      no_resolve: true
+      disabled: {{{tieba_disabled}}}
+
+  # ───────── 抖音（字节跳动广告 / 统计域名，全部不需要 MITM）─────────
+  # 以下域名均同时出现在 ≥2 个独立列表（blackmatrix7 Reject / 秋风 AWAvenue / AdGuard DNS filter / chxm1023）。
+  # 刻意未拦截：mcs.snssdk.com、toblog.ctobsnssdk.com（白名单标注为登录/风控依赖）、dig.bdurl.net（仅单一来源，另有维护者标注 DIRECT）
+  # 开屏广告：新版字节系 App 的开屏/广告接口（/api/ad/splash/ 等）走独立域名 ads*-normal-*.zijieapi.com，
+  # 域名层直接拒绝即可去开屏，不必解密 api*.amemv.com（解密会导致播放接口报错）。
+  - domain_regex:
+      name: "抖音 · 开屏 / 广告接口域名（ads3/ads5-normal-hl/lf/lq.zijieapi.com）"
+      match: '^ads\d*-normal(?:-[a-z0-9]+)?\.zijieapi\.com$'
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_regex:
+      name: "抖音 · 广告素材图片 CDN（p*-ad-sign.byteimg.com）"
+      match: '^p\d+-ad-sign\.byteimg\.com$'
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_regex:
+      name: "抖音 · 日志上报（log.amemv.com / log0-misc-hl.amemv.com）"
+      match: '^log\d*(?:-misc-[a-z]{2})?\.amemv\.com$'
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain:
+      name: "抖音 · 广告接口"
+      match: ad.zijieapi.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain:
+      name: "抖音 · 应用日志上报"
+      match: applog.zijieapi.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain:
+      name: "抖音 · 头条广告平台"
+      match: ad.toutiao.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain:
+      name: "抖音 · 头条 DSP 广告"
+      match: dsp.toutiao.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain:
+      name: "抖音 · 穿山甲广告接口"
+      match: pangolin.snssdk.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_suffix:
+      name: "抖音 · 穿山甲广告 SDK"
+      match: pangolin-sdk-toutiao.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_suffix:
+      name: "抖音 · 穿山甲广告 SDK（备用域 b）"
+      match: pangolin-sdk-toutiao-b.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_suffix:
+      name: "抖音 · 穿山甲广告 SDK（备用域 1）"
+      match: pangolin-sdk-toutiao1.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - domain_suffix:
+      name: "抖音 · 穿山甲广告静态资源"
+      match: pglstatp-toutiao.com
+      policy: REJECT
+      disabled: {{{douyin_disabled}}}
+  - and:
+      name: "抖音 · 禁用 QUIC（仅在开启 MITM 时需要，强制回落到 HTTPS 让 URL 重写可命中）"
+      match:
+        - protocol:
+            match: quic
+        - or:
+            match:
+              - domain_suffix:
+                  match: amemv.com
+              - domain_suffix:
+                  match: snssdk.com
+              - domain_suffix:
+                  match: douyin.com
+              - domain_suffix:
+                  match: zijieapi.com
+      policy: REJECT
+      disabled: {{{douyin_mitm_disabled}}}
+
+  # ───────── 起点读书 ─────────
+  - domain:
+      name: "起点 · 用户行为统计（秋风列表）"
+      match: uedas.qidian.com
+      policy: REJECT
+      disabled: {{{qidian_disabled}}}
+
+  # ───────── 闲鱼 ─────────
+  - domain_keyword:
+      name: "闲鱼 · 阿里系广告统计"
+      match: iyes.youku.com
+      policy: REJECT
+      disabled: {{{xianyu_disabled}}}
+  - and:
+      name: "闲鱼 · 屏蔽 AMDC 调度（防止绕过 MITM）"
+      match:
+        - url_regex:
+            match: '^http:\/\/.+\/amdc\/mobileDispatch'
+        - or:
+            match:
+              - user_agent:
+                  match: "闲鱼*"
+              - user_agent:
+                  match: "%E9%97%B2%E9%B1%BC*"
+      policy: REJECT
+      disabled: {{{xianyu_disabled}}}
+
+  # ───────── 美团 / 美团外卖 ─────────
+  - domain_suffix:
+      name: "美团 · 广告"
+      match: mads.meituan.com
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain_suffix:
+      name: "美团 · 外卖广告"
+      match: ad.e.waimai.sankuai.com
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain_suffix:
+      name: "美团 · 统计上报"
+      match: report.meituan.com
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain_suffix:
+      name: "美团 · 统计上报"
+      match: dreport.meituan.net
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain_suffix:
+      name: "美团 · 统计上报"
+      match: analytics.meituan.net
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain_suffix:
+      name: "美团 · 外卖日志"
+      match: wmlog.meituan.com
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain:
+      name: "美团 · 设备日志上报（秋风列表）"
+      match: data-sdk-uuid-log.d.meituan.net
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  - domain:
+      name: "美团 · DSP 广告曝光（AdGuard 列表）"
+      match: impdsp.meituan.com
+      policy: REJECT
+      disabled: {{{meituan_disabled}}}
+  # 已移除 fmz200 单一来源且用途不明的 meituan.xn / meituan.yoga / meituangov.cn，避免误伤
+
+  # ───────── 腾讯视频 ─────────
+  # 先放行播放必需的 l.qq.com 子域（DRM / 直播），再整体拦截 l.qq.com 广告域
+  - domain:
+      name: "腾讯视频 · 放行 FairPlay DRM"
+      match: fairplay.l.qq.com
+      policy: DIRECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      name: "腾讯视频 · 放行直播"
+      match: livew.l.qq.com
+      policy: DIRECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      match: vd.l.qq.com
+      policy: DIRECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      match: vi.l.qq.com
+      policy: DIRECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain_suffix:
+      name: "腾讯视频 · 腾讯广告平台"
+      match: l.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain_suffix:
+      name: "腾讯视频 · 广点通"
+      match: gdt.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      name: "腾讯视频 · 广告素材"
+      match: adsmind.gdtimg.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      name: "腾讯视频 · 广告图片"
+      match: pgdt.gtimg.cn
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      match: info4.video.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      match: info6.video.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  # 已移除 vv6.video.qq.com：仅 RuCu6 单一来源，fmz200 的腾讯视频规则有意未收录，疑似 IPv6 播放信息接口
+  - domain:
+      name: "腾讯视频 · 推送（广告推送）"
+      match: ios.video.mpush.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      name: "腾讯视频 · 推送（TPNS）"
+      match: tpns.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain:
+      name: "腾讯视频 · 灯塔统计"
+      match: otheve.beacon.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - domain_keyword:
+      name: "腾讯视频 · 埋点上报"
+      match: trace.qq.com
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - ip_cidr:
+      match: 47.110.187.87/32
+      policy: REJECT
+      no_resolve: true
+      disabled: {{{tencent_video_disabled}}}
+  - url_regex:
+      name: "腾讯视频 · 明文广告视频片段"
+      match: '^http:\/\/[\d\.:]*\/?(?:vmind\.qqvideo\.tc|finderpdd\.video)\.qq\.com\/\w+'
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - url_regex:
+      name: "腾讯视频 · 明文广告视频片段（CDN）"
+      match: '^http:\/\/apd-vlive\.apdcdn\.tc\.qq\.com\/vmind\.qqvideo\.tc\.qq\.com\/\w+'
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+  - url_regex:
+      name: "腾讯视频 · 明文广告视频片段（smtcdns）"
+      match: '^http:\/\/apd-\w+\.v\.smtcdns\.com\/vmind\.qqvideo\.tc\.qq\.com\/\w+'
+      policy: REJECT
+      disabled: {{{tencent_video_disabled}}}
+
+  # ───────── 小红书 ─────────
+  - domain:
+      name: "小红书 · 广告图片 CDN"
+      match: ads-img-qc.xhscdn.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+  - domain:
+      name: "小红书 · 广告图片 CDN"
+      match: ads-img-al.xhscdn.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+  - domain:
+      name: "小红书 · 广告视频 CDN"
+      match: ads-video-al.xhscdn.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+  - domain:
+      name: "小红书 · 广告视频 CDN"
+      match: ads-video-qc.xhscdn.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+  - domain:
+      name: "小红书 · 广告追踪"
+      match: t-ads.xiaohongshu.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+  - and:
+      name: "小红书 · 禁用 QUIC（强制回落到 HTTPS）"
+      match:
+        - protocol:
+            match: quic
+        - or:
+            match:
+              - domain_suffix:
+                  match: xiaohongshu.com
+              - domain_suffix:
+                  match: rnote.com
+      policy: REJECT
+      disabled: {{{xiaohongshu_disabled}}}
+
+  # ───────── 哔哩哔哩（规则来源：kokoryh Sparkle / kelee / fmz200 / blackmatrix7）─────────
+  # 拦截备用 API 域名，迫使客户端走可解密的 app.bilibili.com / grpc.biliapi.net（4 家规则一致）
+  - domain:
+      name: "哔哩哔哩 · 备用 API 域（迫使走可解密域名）"
+      match: api.biliapi.com
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      match: app.biliapi.com
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      match: api.biliapi.net
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      match: app.biliapi.net
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      name: "哔哩哔哩 · HTTPDNS（AdGuard 列表）"
+      match: httpdns.bilivideo.com
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      name: "哔哩哔哩 · 数据上报（AdGuard 列表）"
+      match: dataflow.biliapi.com
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - domain:
+      name: "哔哩哔哩 · 阻止用 Google DoH 绕过本地 DNS（kokoryh）"
+      match: dns.google
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - and:
+      name: "哔哩哔哩 · P2P（PCDN）信令：stun / tracker"
+      match:
+        - domain_suffix:
+            match: chat.bilibili.com
+        - or:
+            match:
+              - domain_keyword:
+                  match: stun
+              - domain_keyword:
+                  match: tracker
+              - domain_keyword:
+                  match: p2p
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - dest_port:
+      name: "哔哩哔哩 · P2P（PCDN）上传端口（kokoryh 默认开启，省流量）"
+      match: "4480,4483,9102"
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - url_regex:
+      name: "哔哩哔哩 · 开屏广告视频预取（明文 CDN）"
+      match: '^http:\/\/upos-sz-static\.bilivideo\.com\/ssaxcode\/\w{2}\/\w{2}\/\w{32}-1-SPLASH'
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+  - url_regex:
+      name: "哔哩哔哩 · 开屏广告视频预取（PCDN 节点）"
+      match: '^http:\/\/[\d\.]+:8000\/v1\/resource\/\w{32}-1-SPLASH'
+      policy: REJECT
+      disabled: {{{bilibili_disabled}}}
+
+  # ───────── 高德地图（规则来源：kelee / RuCu6 / zirawell / ddgksf2013 / fmz200 / blackmatrix7）─────────
+  - domain:
+      name: "高德 · 阿里妈妈开屏广告接口域（kelee REJECT，blackmatrix7 / fmz200 拦同域路径）"
+      match: amap-aos-info-nogw.amap.com
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+  - domain:
+      name: "高德 · 推广图片 CDN（kelee）"
+      match: free-aos-cdn-image.amap.com
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+  - domain_suffix:
+      name: "高德 · 广告设备标识"
+      match: adiu.amap.com
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+  - domain_suffix:
+      name: "高德 · 日志上报（AWAvenue / AdGuard）"
+      match: logs.amap.com
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+  - domain_suffix:
+      match: dualstack-logs.amap.com
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+  - and:
+      name: "高德 · 屏蔽 AMDC 调度（防止绕过 MITM）"
+      match:
+        - url_regex:
+            match: '^http:\/\/.+\/amdc\/mobileDispatch'
+        - user_agent:
+            match: "AMapiPhone*"
+      policy: REJECT
+      disabled: {{{amap_disabled}}}
+
+  # ───────── 京东（规则来源：fmz200 / kelee / 秋风 AWAvenue / AdGuard；ad.3.cn 因白名单标注为必需而未拦）─────────
+  - domain_suffix:
+      name: "京东 · 京准通广告平台"
+      match: jzt.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 广告图片（AWAvenue）"
+      match: img-x.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · DSP 广告"
+      match: bdsp.x.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · DSP 广告（AWAvenue）"
+      match: dsp-x.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 广告联盟（AdGuard）"
+      match: ads-union.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 广告数据（AWAvenue）"
+      match: addata.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 点击监测"
+      match: cm.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · Kepler 推广 SDK（AWAvenue）"
+      match: kepler.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      match: keplerapi.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 旧版移动接口 / 推广（AWAvenue）"
+      match: mapi.m.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain_suffix:
+      name: "京东 · 网络诊断上报（fmz200 / kelee）"
+      match: jddebug.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - domain:
+      name: "京东 · HTTPDNS（保证 MITM 生效）"
+      match: dns.jd.com
+      policy: REJECT
+      disabled: {{{jd_disabled}}}
+  - ip_cidr:
+      name: "京东 · HTTPDNS IP"
+      match: 101.124.19.122/32
+      policy: REJECT
+      no_resolve: true
+      disabled: {{{jd_disabled}}}
+
+  # ───────── 中国移动（规则来源：fmz200 / blackmatrix7 / NobyDa / deezertidal / ihxperfect / zwf234）─────────
+  - ip_cidr:
+      name: "中国移动 · 客户端 HTTPDNS IP（fmz200）"
+      match: 120.240.95.37/32
+      policy: REJECT
+      no_resolve: true
+      disabled: {{{chinamobile_disabled}}}
+
+  # ───────── 虎牙直播（规则来源：fmz200 / kelee 广告过滤器 / 秋风 AWAvenue / AdGuard）─────────
+  # 虎牙主接口是 WUP（TAF）二进制协议，信息流广告无法用 jq/脚本处理；这里只拦开屏素材、广告投放与统计域名
+  - domain:
+      name: "虎牙 · 广告投放平台（fmz200 / kelee）"
+      match: business.msstatic.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      name: "虎牙 · 开屏素材 PCDN（fmz200 / AWAvenue）"
+      match: livewebbs2pcdn.msstatic.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      name: "虎牙 · 开屏素材（fmz200）"
+      match: livewebbs2.msstatic.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      name: "虎牙 · 广告文件 PCDN（fmz200）"
+      match: pp-cdnfile2pcdn.msstatic.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      name: "虎牙 · 广告文件 PCDN（AWAvenue）"
+      match: qn-cdnfile1pcdn.msstatic.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain_suffix:
+      name: "虎牙 · 第三方广告 CDN（fmz200 / kelee / AWAvenue）"
+      match: szbdyd.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      name: "虎牙 · 统计上报（AdGuard）"
+      match: ylog.huya.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      match: e-stat.huya.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      match: metric.huya.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+  - domain:
+      match: statwup.huya.com
+      policy: REJECT
+      disabled: {{{huya_disabled}}}
+
+  # ───────── 斗鱼直播（规则来源：kelee / fmz200 / zirawell / AdGuard / 秋风 AWAvenue）─────────
+  - domain_suffix:
+      name: "斗鱼 · 斗鱼玩（游戏推广）"
+      match: wan.douyu.com
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain_suffix:
+      name: "斗鱼 · 埋点统计（fmz200 / AdGuard）"
+      match: dotcounter.douyutv.com
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain:
+      match: dotcounter.douyucdn.cn
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain:
+      match: dotserver.douyucdn.cn
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain:
+      name: "斗鱼 · P2P STUN（kelee）"
+      match: stun1.douyucdn.cn
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain:
+      match: stun1.qvb.qcloud.com
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain_regex:
+      name: "斗鱼 · P2P 分发节点（AWAvenue，省流量）"
+      match: '^(?:dyp2p|p2plive)-[a-z]+\.douyucdn\.cn$'
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - domain:
+      match: p2pchunk-table.douyucdn.cn
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - and:
+      name: "斗鱼 · P2P STUN 端口（kelee）"
+      match:
+        - dest_port:
+            match: "18000"
+        - protocol:
+            match: stun
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+  - url_regex:
+      name: "斗鱼 · 连麦调度（kelee，明文）"
+      match: '^http:\/\/linkmicschedule\.douyucdn\.cn\/im_schedule\/im_gate_list'
+      policy: REJECT
+      disabled: {{{douyu_disabled}}}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# URL 重写（直接返回空响应，相当于 Surge 的 Map Local / reject-*）
+# ──────────────────────────────────────────────────────────────────────────────
+url_rewrites:
+  # ───────── 百度贴吧 ─────────
+  - match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/forum\/getInterestClassList$'   # 兴趣分类推荐
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/search\/discover$'                # 搜索发现
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https:\/\/tieba\.baidu\.com\/c\/f\/forum\/getForumAlbum$'                   # 吧内相册运营位
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https?:\/\/c\.tieba\.baidu\.com\/c\/f\/forum\/hotforum$'                    # 热门吧推荐
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  # 旧版开屏 / 广告接口（blackmatrix7、NobyDa、GFBG-IT、zqzess、ihxperfect 等 ≥6 个列表一致；新版客户端走 getSplashAd，由 jq 处理）
+  - match: '^https?:\/\/(?:c\.tieba|tiebac)\.baidu\.com\/c\/s\/splashSchedule'             # 旧版开屏排期
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https?:\/\/(?:c\.tieba|tiebac)\.baidu\.com\/c\/f\/forum\/getAdInfo'          # 旧版吧内广告
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https?:\/\/(?:c\.tieba|tiebac)\.baidu\.com\/c\/s\/logtogether\?cmd='         # 埋点上报（NobyDa / Keywos / syttys）
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+  - match: '^https?:\/\/(?:c\.tieba|tiebac)\.baidu\.com\/c\/s\/(?:mlog|newlog)$'          # 行为日志上报
+    location: http://reject-dict/
+    disabled: {{{tieba_disabled}}}
+
+  # ───────── 起点读书 ─────────
+  - match: '^https?:\/\/mage(?:v6)?\.if\.qidian\.com\/argus\/api\/v\d\/client\/getsplashscreen'   # 开屏广告
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/magev6\.if\.qidian\.com\/argus\/api\/v\d\/adv\/'                 # 各类广告位（含 getadvlistbatch）
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/client\/iosad'          # iOS 广告配置
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/bookshelf\/getad'       # 书架广告
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/bookshelf\/getHoverAdv'  # 书架右下角悬浮广告（app2smile）
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/mage\.if\.qidian\.com\/Atom\.axd\/Api\/Client\/GetConfIOS'       # 旧版广告配置（NobyDa / syttys / fmz200）
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https?:\/\/qidian\.qpic\.cn\/qidian_common\/'                               # 开屏 / 运营图片（NobyDa / syttys / bai1zi / fmz200；若运营图标缺失可删）
+    location: http://reject-img/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/ywab\.reader\.qq\.com\/user\/experiments\/v2\?'                   # AB 实验（广告策略）
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/push\/getdialog\?'       # 弹窗
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/message\/getpushedmessagelist$'   # 推送消息列表
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/maintain\/playstrip$'    # 横幅条
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/dailyrecommend\/recommendBook\?'   # 每日推书
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/freshman\/bookshelfbtn$' # 新人书架按钮
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/bookshelf\/getTopOperation$'   # 书架顶部运营位
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/booksearch\/hotWords\?'  # 搜索框填充词
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/followsubscribe\/showChapterEndModule\?'   # 章末推广模块
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/checkin\/simpleinfo\?'   # 签到提醒（精简）
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+  - match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/young\/getconf$'         # 青少年模式弹窗
+    location: http://reject-dict/
+    disabled: {{{qidian_disabled}}}
+
+  # ───────── 抖音（以下全部依赖 MITM，默认随 douyin_mitm_disabled 关闭；域名层拦截见 rules 段）─────────
+  - match: '^https?:\/\/[\w-]+\.(?:amemv|snssdk|douyin)\.com\/api\/ad\/'                 # 开屏 / 联盟广告接口
+    location: http://reject-dict/
+    disabled: {{{douyin_mitm_disabled}}}
+  - match: '^https?:\/\/[\w-]+\.(?:amemv|snssdk|douyin)\.com\/aweme\/v\d\/(?:ad|splash|screen\/ad)\/'   # 广告 / 开屏（screen/ad 来自 NobyDa / syttys）
+    location: http://reject-dict/
+    disabled: {{{douyin_mitm_disabled}}}
+  - match: '^https?:\/\/[\w-]+\.snssdk\.com\/.+_ad\/'                                    # 其他 *_ad 接口
+    location: http://reject-dict/
+    disabled: {{{douyin_mitm_disabled}}}
+  - match: '^https?:\/\/[\w-]+\.(?:amemv|snssdk)\.com\/service\/2\/app_log\/'            # 应用日志上报
+    location: http://reject-dict/
+    disabled: {{{douyin_mitm_disabled}}}
+
+  # ───────── 闲鱼 ─────────
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlecommerce\.splash\.ads\/'   # 开屏广告
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.idle\.ad\.expose\/'        # 开屏通用广告曝光
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https?:\/\/acs\.m\.taobao\.com\/gw\/mtop\.taobao\.idle\.home\.welcome\/'    # 淘宝网关下发的闲鱼开屏（blackmatrix7 / kelee / ihxperfect / syttys / bai1zi）
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.user\.strategy\.list\/'   # 首页右下角悬浮广告
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.item\.recommend\.list\/'   # 商品详情底部推荐
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.local\.near\.by\.corner\.info\/'   # 同城角标
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.item\.buy\.feeds\/'   # 我的页面底部商品流
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlemtopsearch\.search\.shade\/'   # 搜索栏填充词
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.playboy\.recommend\/'   # 消息页「感兴趣」推荐
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.item\.resell\.recommendorhotcate\/'   # 这些宝贝超好卖
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+  - match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.idle\.coin\.nextfresh\/'   # 闲鱼币推广
+    location: http://reject-dict/
+    disabled: {{{xianyu_disabled}}}
+
+  # ───────── 美团 / 美团外卖 ─────────
+  # 开屏素材规则来自 blackmatrix7 / NobyDa / fmz200 / kelee / deezertidal / ihxperfect 等多家列表交叉比对
+  # wmapi.meituan.com 接口：fmz200 与 kelee 当前规则均按明文 http 处理且不做 MITM（客户端有证书锁定），这里沿用，不把它加入 MITM
+  - match: '^https?:\/\/wmapi\.meituan\.com\/api\/v\d\/(?:loadInfo|openscreen|startpicture)\?'   # 外卖开屏
+    location: http://reject-dict/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/img\.meituan\.net\/(?:adunion|display|dpmobile|midas)\/\w+\.(?:gif|jpg|jpg\.webp)$'   # 开屏 / 弹窗广告图
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/p\d\.meituan\.net\/(?:bizad|wmbanner|brandCpt)\/\w+\.jpg'       # 开屏品牌广告图
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/p\d\.meituan\.net\/movie\/\w+\.jpg\?may_covertWebp'             # 开屏广告图（movie 路径）
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/(?:s3plus|flowplus)\.meituan\.net\/v\d\/\w+\/linglong\/\w+\.(?:gif|jpg|mp4)'   # 开屏素材
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/img\.meituan\.net\/bizad\/bizad_brandCpt_\d+\.jpg'               # 品牌开屏
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/img\.meituan\.net\/goodsawardpic\/[a-f0-9]+\.png\.webp'          # 首页弹窗素材
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/img\.meituan\.net\/goodsawardpic\/\w+\.gif'                      # 首页动图弹窗
+    location: http://reject-img/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/s3plus\.meituan\.net\/ocean-blk-index\/index\/blk_conf_\d+\.json'   # 运营配置
+    location: http://reject-dict/
+    disabled: {{{meituan_disabled}}}
+  - match: '^https?:\/\/s3plus\.meituan\.net\/v1\/mss_\w+\/(?:brandcpt-vedio|waimai-alita)\/\w+\.zip$'   # 开屏视频包
+    location: http://reject-dict/
+    disabled: {{{meituan_disabled}}}
+  - match: '^http:\/\/59\.82\.113\.10\/amdc\/mobileDispatch\?appkey=213807&'            # 美团 AMDC 调度
+    location: http://reject-dict/
+    disabled: {{{meituan_disabled}}}
+
+  # ───────── 腾讯视频 ─────────
+  - match: '^https?:\/\/vv\.video\.qq\.com\/(?:diff|get)vmind'                          # 贴片广告信息
+    location: http://reject-dict/
+    disabled: {{{tencent_video_disabled}}}
+
+  # ───────── 小红书 ─────────
+  - match: '^https:\/\/ci\.(?:xiaohongshu|rnote)\.com\/system_config\/watermark'         # 评论区图片水印
+    location: http://reject-img/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v1\/surprisebox\/(?:get_style|open|submit_action)'   # 惊喜弹窗
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/www\.(?:xiaohongshu|rnote)\.com\/api\/marketing\/box\/trigger\?'  # 营销弹窗
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/guide\/user_banner'   # 用户横幅
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/note\/guide\?'   # 笔记引导
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/note\/detailfeed\/preload\?'   # 详情页预加载推广
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/www\.(?:xiaohongshu|rnote)\.com\/api\/sns\/(?:v\d+\/ads\/resource|v\d+\/hey\/\w+\/hey_gallery)'   # 广告资源 / hey 画廊
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+  - match: '^https?:\/\/www\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/system_service\/splash_config'   # www 域的开屏配置（blackmatrix7 / ihxperfect / syttys；edith 域由脚本处理）
+    location: http://reject-dict/
+    disabled: {{{xiaohongshu_disabled}}}
+
+  # ───────── 哔哩哔哩 ─────────
+  - match: '^https:\/\/ap[ip]\.bilibili\.com\/x\/(?:resource\/(?:top\/activity|patch\/tab(?:\/v2)?)|v2\/search\/square|vip\/ads\/materials)\?'   # 顶部活动入口 / 皮肤 Tab / 搜索发现 / 大会员广告素材
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+  - match: '^https:\/\/app\.bilibili\.com\/x\/v2\/search\/defaultwords\?'                   # 搜索框默认推广词
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+  - match: '^https:\/\/api\.bilibili\.com\/pgc\/activity\/deliver\/material\/receive\?'     # 番剧页活动弹窗
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+  - match: '^https:\/\/api\.bilibili\.com\/x\/vip\/ads\/material\/report'                  # 大会员广告曝光上报
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+  - match: '^https:\/\/api\.live\.bilibili\.com\/xlive\/e-commerce-interface\/v1\/ecommerce-user\/get_shopping_info\?'   # 直播间购物车
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+  - match: '^https:\/\/line3-h5-mobile-api\.biligame\.com\/game\/live\/large_card_material\?'   # 直播间游戏推广卡
+    location: http://reject-dict/
+    disabled: {{{bilibili_disabled}}}
+
+  # ───────── 高德地图 ─────────
+  - match: '^https:\/\/m5\.amap\.com\/ws\/shield\/dsp\/app\/startup\/init\?'               # 启动 DSP 广告初始化（fmz200）
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https?:\/\/[\w-]+\.amap\.com\/ws\/asa\/ads_attribution'                       # 广告归因（ddgksf2013）
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https?:\/\/optimus-ads\.amap\.com\/uploadimg\/\w+\.gif'                      # 首页左上角动图推广（NobyDa / blackmatrix7 / bai1zi / syttys）
+    location: http://reject-img/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/shield\/search\/new_hotword\?'                   # 搜索框热词
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/shield\/search_poi\/tips_adv\?'                  # 搜索结果广告条
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/shield\/scene\/recommend\?'                      # 搜索框场景推荐
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/shield\/search_business\/process\/orderList\?'   # 订单推广列表
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/faas\/amap-navigation\/card-service-(?:car-end|route-plan)'   # 导航结束页 / 路线规划页推广卡
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/faas\/amap-navigation\/(?:main-page-assets|main-page-location|ridewalk-end-fc|usr-profile-fc\/homeV2)'   # 首页资源位 / 骑步行结束页 / 我的页面
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/(?:mapapi\/hint_text\/offline_data|message\/notice\/list)'   # 提示文案 / 消息角标
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/aos\/main\/page\/product\/list\?'                # 首页产品推广列表
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5\.amap\.com\/ws\/valueadded\/weather\/v2\?'                       # 首页左下角天气挂件（精简，kelee / ddgksf2013；想保留天气可删）
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/oss\.amap\.com\/ws\/banner\/lists\/\?'                              # 横幅
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/ai\.amap\.com\/v1\/ai_rec\/'                                        # 首页底部信息流推荐
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/sns\.amap\.com\/ws\/msgbox\/pull(?:_mp)?\?'                         # 首页顶部消息推广
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5-zb\.amap\.com\/ws\/ride\/home\/page\/get_commuting_card\?'       # 骑行页通勤卡
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5-zb\.amap\.com\/ws\/boss\/(?:order\/car\/(?:feedback\/get_card_questions|feedback\/viptips|king_toolbox_car_bubble|remark\/satisfactionConf|rights_information)|tips\/onscene_visual_optimization)'   # 打车页各类推广
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+  - match: '^https:\/\/m5-zb\.amap\.com\/ws\/boss\/(?:pay\/web\/paySuccess\/info\/request|transportation\/diversion\/resource\/driving)'   # 支付成功页 / 导流
+    location: http://reject-dict/
+    disabled: {{{amap_disabled}}}
+
+  # ───────── 盒马 ─────────
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.render\.querysinglepage'   # 开屏 / 弹窗单页（blackmatrix7 reject-200 / fmz200）
+    location: http://reject-200/
+    disabled: {{{hema_disabled}}}
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.hippotown\.tabbar\.info'   # 底栏推广
+    location: http://reject-dict/
+    disabled: {{{hema_disabled}}}
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.sg\.querysinglescene'      # 单场景推广
+    location: http://reject-dict/
+    disabled: {{{hema_disabled}}}
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.fc\.recommend\.feedscommondservice'   # 信息流推荐
+    location: http://reject-dict/
+    disabled: {{{hema_disabled}}}
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.crm\.platform\.ma\.recommend'   # 营销推荐
+    location: http://reject-dict/
+    disabled: {{{hema_disabled}}}
+  - match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.mimir\.recommend\.after\.purchase\.activity'   # 购后活动推荐
+    location: http://reject-dict/
+    disabled: {{{hema_disabled}}}
+
+  # ───────── 京东 ─────────
+  - match: '^https:\/\/api\.m\.jd\.com\/client\.action\?functionId=(?:searchBoxWord|stationPullService|uniformRecommend[06])'   # 搜索框词 / 推送 / 推荐（kelee）
+    location: http://reject-dict/
+    disabled: {{{jd_disabled}}}
+  - match: '^https:\/\/api\.m\.jd\.com\/client\.action\?functionId=queryMaterialAdverts'   # 广告素材（NobyDa / ihxperfect / bai1zi / zwf234）
+    location: http://reject-dict/
+    disabled: {{{jd_disabled}}}
+  - match: '^https?:\/\/api\.m\.jd\.com\/client\.action\?functionId=getWidgetV1052'       # 直播小窗（fmz200）
+    location: http://reject-dict/
+    disabled: {{{jd_disabled}}}
+
+  # ───────── 中国移动 ─────────
+  - match: '^https?:\/\/(?:client\.app\.coc|clientaccess|app)\.10086\.cn\/biz-orange\/DN\/init\/startInit'   # 开屏广告（fmz200 / blackmatrix7 / kelee / NobyDa / deezertidal / ihxperfect）
+    location: http://reject/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/(?:client\.app\.coc|clientaccess|app)\.10086\.cn\/biz-orange\/DN\/explorePage\/getAdverList'   # 发现页广告列表
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/(?:client\.app\.coc|clientaccess|app)\.10086\.cn\/biz-orange\/DN\/emotionMarket'   # 多个悬浮窗（fmz200）
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/(?:client\.app\.coc|clientaccess|app)\.10086\.cn\/biz-orange\/DN\/(?:findSale|homeSale)\/getsaleAdver'   # 首页 / 发现页促销广告（NobyDa / syttys / bai1zi）
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/gd\.10086\.cn\/gmccapp\/serv\/\?servicename=GMCCAPP_704_002_001_001'   # 广东移动开屏（blackmatrix7 / deezertidal）
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/gd\.10086\.cn\/gmccfile\/file\/image\/preloading703\/'            # 广东移动开屏图（bai1zi / NobyDa）
+    location: http://reject-img/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/m\.sd\.10086\.cn\/zapi\/app_common\/homeWelcome\/welcome\.do'     # 山东移动开屏（blackmatrix7 / zwf234 / deezertidal / bai1zi）
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+  - match: '^https?:\/\/wap\.js\.10086\.cn\/jsmccClient\/cd\/market_content\/api\/v\d\/market_content\.page\.query'   # 江苏移动营销内容（5 个来源）
+    location: http://reject-dict/
+    disabled: {{{chinamobile_disabled}}}
+
+  # ───────── 虎牙直播 ─────────
+  - match: '^https?:\/\/cdn\.wup\.huya\.com\/launch\/queryHttpDns$'                      # HTTPDNS（kelee / fmz200；保证域名规则生效）
+    location: http://reject/
+    disabled: {{{huya_disabled}}}
+  - match: '^https?:\/\/cdnfile1\.msstatic\.com\/cdnfile\/appad\/'                         # 开屏广告图（fmz200）
+    location: http://reject-img/
+    disabled: {{{huya_disabled}}}
+  - match: '^https?:\/\/live-ads\.huya\.com\/live\/getAllEntrance'                        # 直播间广告入口（fmz200）
+    location: http://reject-dict/
+    disabled: {{{huya_disabled}}}
+
+  # ───────── 斗鱼直播 ─────────
+  - match: '^https?:\/\/rtbapi\.douyucdn\.cn\/japi\/sign\/app\/getinfo'                   # 开屏广告（kelee / fmz200）
+    location: http://reject-dict/
+    disabled: {{{douyu_disabled}}}
+  - match: '^https?:\/\/capi\.douyucdn\.cn\/lapi\/sign\/app(?:api)?\/getinfo\?client_sys=ios'   # 旧版开屏接口（fmz200）
+    location: http://reject-dict/
+    disabled: {{{douyu_disabled}}}
+  - match: '^https?:\/\/douyucdn\.cn\/.+\/appapi\/getinfo'                                # 旧版开屏接口（fmz200）
+    location: http://reject-dict/
+    disabled: {{{douyu_disabled}}}
+  - match: '^https?:\/\/staticlive\.douyucdn\.cn\/upload\/signs\/'                        # 开屏图片（fmz200）
+    location: http://reject-img/
+    disabled: {{{douyu_disabled}}}
+  - match: '^https?:\/\/(?:staticlive|capi)\.douyucdn\.cn\/.+\/getStartSend'              # 启动推送（fmz200）
+    location: http://reject-img/
+    disabled: {{{douyu_disabled}}}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 消息体重写（jq 直接修改 JSON / 请求体正则）
+# ──────────────────────────────────────────────────────────────────────────────
+body_rewrites:
+  # ───────── 百度贴吧 ─────────
+  - response_jq:
+      # 全局配置：删除广告 / 弹窗 / 运营相关字段，并把广告数量压为 0
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/s\/sync$'
+      filter: >-
+        del(.activity_switch, .video_report_config, .advertisement_config, .next_start,
+            .push_strategy_new, .live_activity_guide, .h5_pop_ups, .h5_pop_ups_config,
+            .duxiaoman_url, .is_need_remind_live_rooms, .floating_icon, .ad_stlog_switch,
+            .first_time_motivate, .windowStrategyList, .ad_adsense, .ad_config,
+            .videoup_guide_pop, .ad_origin_config_switch, .needNewUserLead, .alaTabColor,
+            .search_guide, .ad_sdk_priority, .low_version_pop_config, .ad_num_competition_frs,
+            .live_new_user_guide_day, .screen_fill_data_result, .yy_live_tab,
+            .ad_num_competition_personalize, .complete_apk_url, .user_activity, .homepage_guide,
+            .bottom_bubble_config, .home_screen_ad, .afSearch_tab, .recent_client_info,
+            .video_activity, .namoaixud_url, .yy_live_config, .user_growth_task_list,
+            .cloud_control_data_info, .scheme_whitelist)
+        | if (.wl_config|type) == "object" then
+            .wl_config |= (
+              del(.pb_banner_funad_cache_strategy, .pb_comment_asyncafd_cache_strategy,
+                  .download_edge_float, .download_pause_retain_dialog_conf,
+                  .download_mobile_dialog_conf, .download_fake_progress_config_a,
+                  .download_fake_progress_config_b)
+              | (if has("home_ad_num") then .home_ad_num = 0 else . end)
+              | (if has("frs_ad_num") then .frs_ad_num = 0 else . end)
+              | (if has("pb_comment_ad_num") then .pb_comment_ad_num = 0 else . end)
+              | (if has("index_bear_density") then .index_bear_density = 0 else . end)
+              | (if has("frs_bear_density") then .frs_bear_density = 0 else . end)
+              | (if has("index_bear_first_floor_max") then .index_bear_first_floor_max = 999999999 else . end)
+              | (if has("index_bear_first_floor_min") then .index_bear_first_floor_min = 999999999 else . end))
+          else . end
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 精简首页顶部 Tab（只保留「推荐」，非广告，不需要可删）
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/s\/sync$'
+      filter: >-
+        if (.index_tab_info|type) == "array" then .index_tab_info |= map(select(.tab_name == "推荐")) else . end
+        | if (.top_level_navi|type) == "object" then
+            .top_level_navi |= {"推荐": .["推荐"], "侧边栏": .["侧边栏"], "关注": .["关注"]}
+          else . end
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 开屏广告（JSON 版接口）
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/ad\/getSplashAd$'
+      filter: 'if .error_code == 0 then .error_code = 2230209 | .data = null else . end'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 看图模式广告
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/tiebaads\/commonbatch'
+      filter: 'if (.res|type) == "object" and (.res.ad|type) == "array" then .res.ad = [] else . end'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 看图页推荐直播
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/pb\/picpage'
+      filter: 'if (.recom_live_list|type) == "array" then .recom_live_list = [] else . end'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 我的页面：度小满 / 会员横幅 / 直播 / 商业入口 / 游戏等
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/u\/user\/profile$'
+      filter: >-
+        del(.url_map, .user_agent_info, .bubble_info, .duxiaoman_entry, .uc_card, .finance_tab,
+            .vip_banner, .ala_live_info, .recom_naws_list, .duxiaoman, .namoaixud, .namoaixud_entry)
+        | if (.user|type) == "object" then
+            .user |= (del(.consume_info)
+              | if (.shake_ad_switch|type) == "object" then .shake_ad_switch.is_show = 0 else . end)
+          else . end
+        | if (.custom_grid|type) == "array" then
+            .custom_grid |= map(select(.title != "游戏大厅" and .title != "预约管理" and .title != "领话费" and .title != "短故事"))
+          else . end
+        | if (.zone_info|type) == "array" then
+            .zone_info |= map(select(.type != "commerce" and .type != "banner" and .type != "game"))
+            | .zone_info |= map(.common_func |= (if .common_func_noraml then .common_func_noraml |= map(select(.name != "创建智能体")) else . end))
+          else . end
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 侧拉抽屉：游戏中心 / 工具 / 任务 / 会员横幅
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/sidebar\/home'
+      filter: 'del(.game_center, .tools, .task_list, .vip_banner)'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 进吧引导页热搜
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/forum\/forumGuide$'
+      filter: 'del(.hot_search)'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 吧内底部活动卡片
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/c\/f\/frs\/frsBottom'
+      filter: 'del(.card_activity)'
+      disabled: {{{tieba_disabled}}}
+  - response_jq:
+      # 搜索页推荐内容
+      match: '^https?:\/\/tieba(?:c)?\.baidu\.com\/mo\/q\/search\/startPage'
+      filter: 'del(.data)'
+      disabled: {{{tieba_disabled}}}
+
+  # ───────── 起点读书 ─────────
+  - response_jq:
+      # 客户端配置：关闭 WolfEye、活动图标 / 弹窗 / 福袋、青少年弹窗频率
+      match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v1\/client\/getconf$'
+      filter: >-
+        if (.Data|type) == "object" then
+          .Data |= (
+            (if has("WolfEye") then .WolfEye = 0 else . end)
+            | del(.ActivityPageBackPushNoticeFrequency, .ActivityIcon, .ActivityPopup, .LuckBag)
+            | (if (.CloudSetting|type) == "object" and (.CloudSetting|has("TeenShowFreq")) then .CloudSetting.TeenShowFreq = 0 else . end))
+        else . end
+      disabled: {{{qidian_disabled}}}
+  - response_jq:
+      # 每日导读
+      match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v2\/dailyrecommend\/getdailyrecommend\?'
+      filter: 'if (.Data|type) == "object" and (.Data|has("Items")) then .Data.Items = [] else . end'
+      disabled: {{{qidian_disabled}}}
+  - response_jq:
+      # 我的页面：福利按钮
+      match: '^https:\/\/magev6\.if\.qidian\.com\/argus\/api\/v3\/user\/getaccountpage\?'
+      filter: 'if (.Data|type) == "object" then del(.Data.BenefitButtonList) else . end'
+      disabled: {{{qidian_disabled}}}
+
+  # ───────── 抖音（实验性：信息流广告过滤，默认关闭；需先按参数说明开启抖音 MITM）─────────
+  - response_jq:
+      # 过滤 aweme_list 中 is_ads / raw_ad_data / ad_info 标记的广告视频
+      match: '^https:\/\/[\w-]+\.(?:amemv|snssdk)\.com\/aweme\/v\d\/(?:feed|follow\/feed|nearby\/feed|aweme\/post)\/'
+      filter: >-
+        if (.aweme_list|type) == "array" then
+          .aweme_list |= map(select(((.is_ads // false) != true) and ((.raw_ad_data // null) == null) and ((.ad_info // null) == null)))
+        else . end
+      disabled: {{{douyin_feed_filter_disabled}}}
+
+  # ───────── 闲鱼 ─────────
+  - response_jq:
+      # 首页信息流：只保留商品卡片，移除 banner / 妈妈广告 / 运营卡
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.home\.nextfresh\/'
+      filter: >-
+        if (.data|type) == "object" then
+          .data |= (
+            (if (.homeTopList|type) == "array" then .homeTopList |= map(select(.sectionType == "kingkongDo")) else . end)
+            | (if (.sections|type) == "array" then
+                .sections |= map(select(
+                  ((try .data.clickParam.args.cardType catch null) as $ct | $ct != "homeMultiBanner" and $ct != "mamaAD")
+                  and ((try .template.name catch null) as $tn | ($tn|type) == "string"
+                       and ($tn == "idlefish_home_new_commodity_card" or ($tn|contains("fish_home_tags_item_card"))))))
+              else . end))
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 首页顶部组件刷新
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.widget\.refresh\.get\/'
+      filter: 'if ((try .data.homeTopList catch null)|type) == "array" then .data.homeTopList |= map(select(.sectionType == "kingkongDo")) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 首页「鲸」模块：只保留小程序入口
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.home\.whale\.modulet\/'
+      filter: 'if ((try .data.container.sections catch null)|type) == "array" then .data.container.sections |= map(select((try .template.name catch null) == "fish_home_miniapp")) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 关注页信息流：移除推荐
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.fun\.follow\.feed\.list\/'
+      filter: 'if ((try .data.sections catch null)|type) == "array" then .data.sections |= map(select(.cardType == 2001)) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 社区页：只保留商品 / 内容卡
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.home\.community\/'
+      filter: >-
+        if ((try .data.feedsList catch null)|type) == "array" then
+          .data.feedsList |= map(select((try .template.name catch null) as $tn | $tn == "idlefish_home_new_commodity_card" or $tn == "idlefish_home_new_content_card"))
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 新品页：移除 banner / 妈妈广告
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.home\.newitem\.page\/'
+      filter: >-
+        if ((try .data.sections catch null)|type) == "array" then
+          .data.sections |= map(select((try .data.clickParam.args.cardType catch null) as $ct | $ct != "banner" and $ct != "mamaAD"))
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 同城页横幅：只保留金刚位
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.local\.flow\.plat\.section\/'
+      filter: >-
+        if ((try .data.data.components catch null)|type) == "array" then
+          .data.data.components |= map(select((try .data.template.name catch null) as $tn | ($tn|type) == "string" and ($tn|contains("fish_city_kingkong"))))
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 同城页顶部卡片
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.local\.home\.top\/'
+      filter: 'if ((try .data.data.components catch null)|type) == "array" then .data.data.components |= map(select(.key == "fish_home_second_stage_top_cardV3")) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 同城页信息流：移除广告卡
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.local\.home\/'
+      filter: 'if ((try .data.sections catch null)|type) == "array" then .data.sections |= map(select(((try .template.cardEnum catch null) != "ads") and (.cardType == "common"))) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 我的页面：只保留 头部 / 用户信息 / 交易 / 评价 / 工具，去掉会员等级提示
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.idle\.user\.page\.my\.adapter\/'
+      filter: >-
+        if ((try .data.container.sections catch null)|type) == "array" then
+          .data.container.sections |= map(select((try .template.name catch null) as $tn | ($tn|type) == "string" and ($tn|test("^my_fy[0-9]+_(header|user_info|trade|appraise|tools)$"))))
+          | .data.container.sections |= map(.item |= (if .level and .level.exContent and (.level.exContent|has("tips")) then del(.level) else . end))
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 首页顶部频道：移除「省钱」等推广 Tab
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlehome\.home\.circle\.list\/'
+      filter: 'if ((try .data.circleList catch null)|type) == "array" then .data.circleList |= map(select(.bizCode != "saveMoney")) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 搜索结果：移除广告商品与结果前置条
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlemtopsearch\.search\/'
+      filter: >-
+        if ((try .data.resultList catch null)|type) == "array" then
+          .data.resultList |= map(if (try .data.item.main.exContent.dislikeFeedback.clickParam.args.bizType catch null) == "ad" then empty else . end)
+          | del(.data.resultPrefixBar)
+        else . end
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 搜索发现：移除市场热点
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlemtopsearch\.search\.discover\/'
+      filter: 'if ((try .data.resultList catch null)|type) == "array" then .data.resultList |= map(select(.type != "MarketHotSpot")) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 搜索激活页：移除热词
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idlemtopsearch\.item\.search\.activate\/'
+      filter: 'if ((try .data.cardList catch null)|type) == "array" then .data.cardList |= map(if has("cardData") and (.cardData|type) == "object" and (.cardData|has("hotwords")) then .cardData |= del(.hotwords) else . end) else . end'
+      disabled: {{{xianyu_disabled}}}
+  - response_jq:
+      # 群组 / 圈子页横幅
+      match: '^https:\/\/(?:g-)?acs\.m\.goofish\.com\/gw\/mtop\.taobao\.idle\.(?:group|circle)\.myself\.banner\/'
+      filter: 'if (.data|type) == "object" then .data.bannerList = [] else . end'
+      disabled: {{{xianyu_disabled}}}
+
+  # ───────── 腾讯视频 ─────────
+  - request_regex:
+      # 把播放请求里的预览 / 广告参数置 0（原 kelee replace-body 脚本的等价写法）
+      match: '^https?:\/\/vv\.video\.qq\.com\/getvinfo'
+      find: '&sppreviewtype=\d(.*)&spsrt=\d'
+      replace: '&sppreviewtype=0$1&spsrt=0'
+      disabled: {{{tencent_video_disabled}}}
+
+  # ───────── 小红书（搜索页，轻量 jq 处理）─────────
+  - response_jq:
+      # 搜索页横幅
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/search\/banner_list'
+      filter: 'if has("data") then .data = {} else . end'
+      disabled: {{{xiaohongshu_disabled}}}
+  - response_jq:
+      # 搜索页热搜榜
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/search\/hot_list'
+      filter: 'if (.data|type) == "object" and (.data|has("items")) then .data.items = [] else . end'
+      disabled: {{{xiaohongshu_disabled}}}
+  - response_jq:
+      # 搜索栏填充词
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/search\/hint'
+      filter: 'if (.data|type) == "object" and (.data|has("hint_words")) then .data.hint_words = [] else . end'
+      disabled: {{{xiaohongshu_disabled}}}
+  - response_jq:
+      # 搜索页猜你想搜
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/search\/trending\?'
+      filter: >-
+        if (.data|type) == "object" then
+          .data |= ((if has("queries") then .queries = [] else . end) | (if has("hint_word") then .hint_word = {} else . end))
+        else . end
+      disabled: {{{xiaohongshu_disabled}}}
+
+  # ───────── 哔哩哔哩（JSON 接口；gRPC 接口由下方 kokoryh 脚本处理）─────────
+  - response_jq:
+      # 阿里 HTTPDNS（明文 http）：清空 B 站 API 域名的解析结果，迫使走系统 DNS 以便 MITM（kokoryh）
+      match: '^http:\/\/[^?]+\/resolve\?host=(?:ap[ip]\.bilibili\.com|grpc\.biliapi\.net|api\.live\.bilibili\.com)'
+      filter: 'if (.dns|type) == "array" then .dns |= map(.ips = [] | .ttl = 86400) else . end'
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 开屏广告：清空 show / event_list（kelee / fmz200 / Maasea）
+      match: '^https:\/\/app\.bilibili\.com\/x\/v2\/splash\/(?:list|show|event\/list2)\?'
+      filter: 'if (.data|type) == "object" then .data |= with_entries(if (.key | IN("show", "event_list")) then .value = [] else . end) else . end'
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 推荐流（JSON 版）：去掉 ad_info / banner / card_goto 以 ad 开头 / banner 类卡片
+      match: '^https:\/\/app\.bilibili\.com\/x\/v2\/feed\/index\?'
+      filter: >-
+        if ((try .data.items catch null)|type) == "array" then
+          .data.items |= map(select((.ad_info == null) and (.banner_item == null)
+            and (((.card_goto // "") | startswith("ad")) | not)
+            and (((.card_type // "") | test("ad|banner")) | not)))
+        else . end
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 竖屏 Story 流：去广告卡、购物车图标
+      match: '^https:\/\/app\.bilibili\.com\/x\/v2\/feed\/index\/story\?'
+      filter: >-
+        if ((try .data.items catch null)|type) == "array" then
+          .data.items |= map(select((.ad_info == null) and (((.card_goto // "") | startswith("ad")) | not)) | del(.story_cart_icon))
+        else . end
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 直播首页 / 直播间：一起看 / 活动横幅 / 功能卡 / 预约 / 购物（kelee / kokoryh）
+      match: '^https:\/\/api\.live\.bilibili\.com\/xlive\/(?:app-interface\/v2\/index\/feed|app-room\/v1\/index\/getInfoBy(?:Room|User))\?'
+      filter: >-
+        if (.data|type) == "object" then
+          .data |= (del(.play_together_info, .play_together_info_v2, .activity_banner_info)
+            | (if (.function_card|type) == "object" then .function_card |= with_entries(.value = null) else . end)
+            | (if ((try .new_tab_info.outer_list catch null)|type) == "array" then .new_tab_info.outer_list |= map(select(.biz_id != 33)) else . end)
+            | (if (.card_list|type) == "array" then .card_list |= map(select(.card_type != "banner_v2")) else . end)
+            | (if has("show_reserve_status") then .show_reserve_status = false else . end)
+            | (if (.reserve_info|type) == "object" then .reserve_info.show_reserve_status = false else . end)
+            | (if (.shopping_info|type) == "object" then .shopping_info.is_show = 0 else . end))
+        else . end
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 番剧 / 影视频道页：去 TIP 模块与活动 banner（kokoryh）
+      match: '^https:\/\/api\.bilibili\.com\/pgc\/page\/channel\?'
+      filter: >-
+        if ((try .data.modules catch null)|type) == "array" then
+          .data.modules |= map(select(.type != "TIP")
+            | if .type == "BANNER" and ((try .module_data.items catch null)|type) == "array" then
+                .module_data.items |= map(select(((.url // "") | startswith("https://www.bilibili.com/blackboard/era/")) | not))
+              else . end)
+        else . end
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # 番剧详情：去付费推广模块（kokoryh / kelee）
+      match: '^https:\/\/api\.bilibili\.com\/pgc\/view\/v2\/app\/season\?'
+      filter: 'if (.data|type) == "object" then del(.data.payment) else . end'
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      # P2P 信令地址改成会被上方规则拦截的域名（kokoryh）
+      match: '^https:\/\/api\.live\.bilibili\.com\/xlive\/open-interface\/v2\/tracker\/conf\?'
+      filter: 'if (.data|type) == "object" then .data.domains = ["wss://tracker.chat.bilibili.com"] else . end'
+      disabled: {{{bilibili_disabled}}}
+  - response_jq:
+      match: '^https:\/\/api\.bilibili\.com\/x\/pd-proxy\/tracker\?'
+      filter: 'if (.data|type) == "object" then .data |= map_values(if type == "array" then map("stun.chat.bilibili.com:3478") else . end) else . end'
+      disabled: {{{bilibili_disabled}}}
+
+  # ───────── 高德地图（其余接口由下方 zirawell 脚本处理）─────────
+  - response_jq:
+      # 详情页顶部优惠横幅 / 资源位（kelee / zirawell）
+      match: '^https:\/\/m5\.amap\.com\/ws\/shield\/search_business\/process\/marketingOperationStructured\?'
+      filter: 'if (.data|type) == "object" then del(.data.commonMaterial, .data.tipsOperationLocation, .data.resourcePlacement) else . end'
+      disabled: {{{amap_disabled}}}
+  - response_jq:
+      # 首页搜索框历史记录里的推广标签
+      match: '^https:\/\/m5\.amap\.com\/ws\/shield\/search_poi\/homepage\?'
+      filter: 'del(.history_tags)'
+      disabled: {{{amap_disabled}}}
+  - response_jq:
+      # 打车页订单详情弹窗
+      match: '^https:\/\/m5-zb\.amap\.com\/ws\/sharedtrip\/taxi\/order_detail_car_tips\?'
+      filter: 'if ((try .data.carTips.data catch null)|type) == "object" then del(.data.carTips.data.popupInfo) else . end'
+      disabled: {{{amap_disabled}}}
+
+  # ───────── 京东 ─────────
+  - response_jq:
+      # 开屏广告：清空图片列表（fmz200 脚本同逻辑）
+      match: '^https:\/\/api\.m\.jd\.com\/client\.action\?functionId=start'
+      filter: '(if (.images|type) == "array" then .images = [] else . end) | (if has("showTimesDaily") then .showTimesDaily = 0 else . end)'
+      disabled: {{{jd_disabled}}}
+  - response_jq:
+      # 基础配置：关闭 HTTPDNS 与 socket 监控，保证 MITM 生效（kelee）
+      match: '^https:\/\/api\.m\.jd\.com\/client\.action\?functionId=basicConfig'
+      filter: >-
+        if (.data|type) == "object" then
+          .data |= ((if ((try .JDMessage.socketmonitor catch null)|type) == "object" then
+                        .JDMessage.socketmonitor |= ((if has("isSocketEstablishedAhead") then .isSocketEstablishedAhead = 0 else . end)
+                                                     | (if has("isSocketReport") then .isSocketReport = 0 else . end))
+                      else . end)
+                    | (if ((try .JDHttpToolKit.httpdns catch null)|type) == "object" and (.JDHttpToolKit.httpdns|has("httpdns")) then .JDHttpToolKit.httpdns.httpdns = 0 else . end))
+        else . end
+      disabled: {{{jd_disabled}}}
+
+  # ───────── 斗鱼直播（kelee 的脚本逻辑全部用 jq 还原，无需外部脚本）─────────
+  - response_jq:
+      # 首页推荐：去掉轮播图与视频流里带 ad 字段的卡片
+      match: '^https:\/\/apiv2\.douyucdn\.cn\/mgapi\/livenc\/home\/getRecV3'
+      filter: >-
+        if (.data|type) == "object" then
+          .data |= (
+            (if (.rec_cont|type) == "array" then .rec_cont |= map(select(((.ad // false) == false) or (.ad == 0))) else . end)
+            | (if (.rec_card|type) == "array" then
+                .rec_card |= map(if ((try .card_banner catch null)|type) == "array" then .card_banner |= map(select(((.ad // false) == false) or (.ad == 0))) else . end)
+              elif (.rec_card|type) == "object" then
+                .rec_card |= map_values(if ((try .card_banner catch null)|type) == "array" then .card_banner |= map(select(((.ad // false) == false) or (.ad == 0))) else . end)
+              else . end))
+        else . end
+      disabled: {{{douyu_disabled}}}
+  - response_jq:
+      # 直播间：悬浮窗 / 宝箱入口
+      match: '^https:\/\/apiv2\.douyucdn\.cn\/japi\/entrance\/roomRes\/nc\/m\/list'
+      filter: 'if (.data|type) == "object" then del(.data.pendant_a, .data.entrance_d) else . end'
+      disabled: {{{douyu_disabled}}}
+  - response_jq:
+      # 全局开关：大神陪玩 / 关注更多主播 / 直播横幅 / 首页活动悬浮窗 / 带货 / QQ 游戏（根级与 data 级两种结构都处理）
+      match: '^https:\/\/venus\.douyucdn\.cn\/venus\/config\/static\/update.+keyCodeSet=flow_config'
+      filter: >-
+        def off: reduce ("greatGodGameSitterSwitch","followMoreAnchorEntrance","sdklivebanner","homeActFloatSwitch","bringGoodsSwitch","qqGameSwitch") as $k (.; if has($k) then .[$k] = 0 else . end);
+        (if type == "object" then off else . end)
+        | (if (.data|type) == "object" then .data |= off else . end)
+      disabled: {{{douyu_disabled}}}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 脚本（只有 jq 做不到的才用脚本：贴吧 ProtoBuf、小红书信息流/水印）
+#
+# 安全审计（2026-11-07）：两段脚本均已逐行检查
+#   · 不含 $httpClient / fetch / eval / new Function 等外联或动态执行代码（小红书脚本里的网络封装仅存在于通用 Env 库，脚本正文从未调用）
+#   · 只做响应体字段删改 + 本地 $persistentStore 缓存（用于去水印），不读取 Cookie、不上传数据、不插入任何内容
+#   · script_url 固定到审计时的 commit，远端仓库后续被改动也不会自动生效；需要升级时先 diff 再换 commit
+#     tieba-proto.js  commit c9d4d50 (2025-11-18)  sha256 6015d737870b6d89c38a0181479ed715e07d11b5a2c3746f96f95e25835e8610
+#     xiaohongshu.js  commit 2dfe1fa (2026-06-05)  sha256 318d89bce1117edb26a93b383804e195649ec4674a04efa9e3ddb4ef7f34b498
+#   · 2026-11-07 第二批（哔哩哔哩 / 高德 / 盒马 / 京东）同样逐段检查并固定 commit：
+#     kokoryh bilibili.protobuf.response.js  commit d513a2e (2026-11-05)  sha256 bfcc0970105056b51a02eb643931c8d4a8d9656f25a5c3f0d6fe9cf6b4d15f8e
+#       - 只在 gRPC 响应里删 cm / ads 字段；内置 fetch 封装从未被调用；
+#       - 它的「空降助手」功能会把 B 站 chronos 包地址换成作者自己 GitHub 上的 zip，本模块通过 "sponsorBlock":"#" 明确关闭，不引入第三方代码包
+#     zirawell amap.js      commit f40c127 (2025-12-04)  sha256 f972c090681ff70942280c80f11687be330bbfbe77f1837dcea99f44e4663677  （RuCu6 原作，纯字段删改）
+#     zirawell freshippo.js commit 2ce3867 (2025-12-04)  sha256 edf71faccbca61b153bbce98f56b75e27313883cf520e5e315f6ba15ed52360d  （纯字段过滤）
+#     fmz200 jingdong.js    commit cd32a8c (2025-06-30)  sha256 3e7cc975f8985a4d2dbdbdefc405d0e3e6c9c07bf3c5361da1ecae206b6c04a1  （纯字段删改）
+#     弃用 ddgksf2013/amap.js：代码经 jsjiami 混淆无法完整审计，改用功能等价、可读的 zirawell 版本
+#   · 想跟随上游自动更新，可把 URL 中的 commit 换回 master / main（放弃固定版本的保护）
+# ──────────────────────────────────────────────────────────────────────────────
+scriptings:
+  # ───────── 百度贴吧：ProtoBuf 接口（推荐流 / 吧内列表 / 帖内广告 / 信息流广告位）─────────
+  - http_response:
+      name: "贴吧 · ProtoBuf 信息流与帖内广告"
+      match: '^https?:\/\/(?:tiebac|tieba|c\.tieba)\.baidu\.com\/c\/(?:f\/(?:excellent\/personalized|frs\/(?:page|threadlist|generalTabList)|ad\/getFeedAd|pb\/page)|b\/ad\/adBid)\?cmd=\d+&format=protobuf'
+      script_url: https://raw.githubusercontent.com/app2smile/rules/c9d4d50aa5d6f96b04fddd5f2386e79047314830/js/tieba-proto.js
+      body_required: true
+      binary_body: true
+      max_size: 5242880
+      timeout: 10
+      arguments:
+        _compat.$argument: "per_filter_video_thread={{{tieba_filter_video_thread}}}"
+      disabled: {{{tieba_disabled}}}
+
+  # ───────── 小红书：fmz200 脚本（信息流广告 / 开屏 / 水印）─────────
+  - http_response:
+      name: "小红书 · 开屏广告与界面配置"
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/system_service\/(?:config\?|splash_config)'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/2dfe1fa129085015a9abed46b4474d34d4426269/Scripts/xiaohongshu/xiaohongshu.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{xiaohongshu_disabled}}}
+  - http_response:
+      name: "小红书 · 信息流广告（首页 / 关注 / 搜索 / 感兴趣的人）"
+      match: '^https?:\/\/(?:edith|rec|so|www)\.(?:xiaohongshu|rnote)\.com\/api\/sns\/(?:v6\/homefeed\?|v4\/followfeed\?|v2\/user\/followings\/followfeed|v10\/search\/notes\?|v5\/recommend\/user\/follow_recommend\?)'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/2dfe1fa129085015a9abed46b4474d34d4426269/Scripts/xiaohongshu/xiaohongshu.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{xiaohongshu_disabled}}}
+  - http_response:
+      name: "小红书 · 详情页小部件"
+      match: '^https?:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/v\d+\/note\/widgets'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/2dfe1fa129085015a9abed46b4474d34d4426269/Scripts/xiaohongshu/xiaohongshu.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{xiaohongshu_disabled}}}
+  - http_response:
+      name: "小红书 · 去图片 / 视频 / 实况照片水印"
+      match: '^https?:\/\/(?:edith|rec|www)\.(?:xiaohongshu|rnote)\.com\/api\/sns\/(?:v1\/note\/(?:imagefeed|live_photo\/save)|v2\/note\/feed|v3\/note\/videofeed|v4\/note\/videofeed|v10\/note\/video\/save)'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/2dfe1fa129085015a9abed46b4474d34d4426269/Scripts/xiaohongshu/xiaohongshu.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{xiaohongshu_disabled}}}
+  - http_response:
+      name: "小红书 · 评论区去水印"
+      match: '^https:\/\/edith\.(?:xiaohongshu|rnote)\.com\/api\/sns\/(?:v5\/note\/comment\/list|v3\/note\/comment\/sub_comments|v1\/interaction\/comment\/video\/download)\?'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/2dfe1fa129085015a9abed46b4474d34d4426269/Scripts/xiaohongshu/xiaohongshu.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{xiaohongshu_disabled}}}
+
+  # ───────── 哔哩哔哩：gRPC / ProtoBuf 接口（kokoryh Sparkle）─────────
+  # 覆盖：热门 / 动态 / 播放页（推荐相关、底部商业卡、进度条推广点）/ 播放地址 / 弹幕视图 / 评论置顶广告 / 搜索结果广告
+  # 需要 Egern 的 HTTP/2 MITM（gRPC 走 h2）。参数：displayUpList 动态最常访问(auto/show/hide)，purifyComment 过滤置顶评论广告，
+  # sponsorBlock 固定为 "#"（关闭空降助手，避免替换客户端 chronos 包），logLevel 4 = 仅错误
+  - http_response:
+      name: "哔哩哔哩 · gRPC 信息流 / 播放页 / 评论 / 搜索广告"
+      match: '^https:\/\/(?:grpc\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:show\.v1\.Popular\/Index|dynamic\.v2\.Dynamic\/DynAll|view(?:unite)?\.v1\.View\/(?:View|ViewProgress|RelatesFeed|AIRelateAsync)|playurl\.v1\.PlayURL\/PlayView|playerunite\.v1\.Player\/PlayViewUnite)|polymer\.app\.search\.v1\.Search\/SearchAll|community\.service\.dm\.v1\.DM\/DmView|main\.community\.reply\.v1\.Reply\/MainList|pgc\.gateway\.player\.v2\.PlayURL\/PlayView)$'
+      script_url: https://raw.githubusercontent.com/kokoryh/Sparkle/d513a2eeab382c640ccd5d6ecd76e07c4828b1ed/dist/bilibili.protobuf.response.js
+      body_required: true
+      binary_body: true
+      max_size: 20971520
+      timeout: 15
+      arguments:
+        _compat.$argument: '{"displayUpList":"auto","purifyComment":1,"sponsorBlock":"#","logLevel":"4"}'
+      disabled: {{{bilibili_disabled}}}
+
+  # ───────── 高德地图：zirawell（RuCu6 原作）脚本 ─────────
+  # 覆盖：开屏、首页底部卡片、路线规划 / 导航详情推广与插播语音广告、附近页、搜索建议 / 结果 / 详情页推广、我的页面、打车页、公交 / 酒店页
+  - http_response:
+      name: "高德 · 开屏 / 首页 / 路线规划 / 导航 / 搜索 / 附近 / 我的 / 打车页推广"
+      match: '^https:\/\/(?:m5|m5-zb|info)\.amap\.com\/ws\/(?:aos\/perception\/publicTravel\/beforeNavi\?|boss\/car\/order\/content_info|boss\/order_web\/friendly_information|bus\/plan\/integrate\?|c3frontend\/af-(?:hotel|launch)\/page\/main|faas\/amap-navigation\/(?:card-service-plan-home|main-page(?:\?|$))|perception\/drive\/route(?:Info|Plan)|promotion-web\/resource(?:\/home)?\?|shield\/dsp\/profile\/index\/nodefaasv3\?|shield\/frogserver\/aocs\/updatable\/|shield\/search\/(?:common\/coupon\/info|nearbyrec_smart\?|poi\/detail)|shield\/search_bff\/hotword\?|shield\/search_poi\/(?:search\/sp|mps|sug|tips_operation_location)|valueadded\/alimama\/splash_screen\?)'
+      script_url: https://raw.githubusercontent.com/zirawell/R-Store/f40c1273a36a19a35a537e3b2ea84fd5d1264764/Res/Scripts/AntiAd/amap.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{amap_disabled}}}
+
+  # ───────── 盒马：zirawell 脚本 ─────────
+  - http_response:
+      name: "盒马 · 首页 / 我的页 / 信息流推广"
+      match: '^https?:\/\/acs(?:\.|-)m\.(?:taobao|freshippo)\.com\/gw\/mtop\.wdk\.render\.query(?:indexpage|mypage|tabfeedstream)'
+      script_url: https://raw.githubusercontent.com/zirawell/R-Store/2ce3867e8726edeaf87ceb0303ea07ef4fc2d376/Res/Scripts/AntiAd/freshippo.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{hema_disabled}}}
+
+  # ───────── 京东：fmz200 脚本（开屏由上方 jq 处理）─────────
+  - http_response:
+      name: "京东 · 首页浮层 / 我的 / 订单 / 物流 / 新品页推广"
+      match: '^https:\/\/api\.m\.jd\.com\/client\.action\?functionId=(?:deliverLayer|getTabHomeInfo|myOrderInfo|orderTrackBusiness|personinfoBusiness|welcomeHome)'
+      script_url: https://raw.githubusercontent.com/fmz200/wool_scripts/cd32a8c7e5959712dca9839c37a0d0d4c3934a36/Scripts/jingdong/jingdong.js
+      body_required: true
+      max_size: 5242880
+      timeout: 30
+      disabled: {{{jd_disabled}}}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MITM 域名（HTTPS 解密范围；某 App 异常时可直接删掉对应行）
+# ──────────────────────────────────────────────────────────────────────────────
+mitm:
+  hostnames:
+    includes:
+      # 百度贴吧
+      - tiebac.baidu.com
+      - tieba.baidu.com
+      - c.tieba.baidu.com
+      # 起点读书
+      - magev6.if.qidian.com
+      - mage.if.qidian.com
+      - ywab.reader.qq.com
+      - qidian.qpic.cn                 # 运营图片 CDN（仅为拦截 qidian_common 开屏图；介意解密开销可删）
+      # 抖音：默认不解密（解密 API 域名会让播放器的 /aweme/v1/play/ 等请求证书校验失败、视频报错）。
+      # 下面两项是参数占位符，默认指向不存在的 *.invalid 域名，等于不解密；
+      # 想尝试 MITM 时在参数里把 douyin_mitm_host_1 / _2 改为 "api*.amemv.com" / "aweme*.snssdk.com"
+      - "{{{douyin_mitm_host_1}}}"
+      - "{{{douyin_mitm_host_2}}}"
+      # 闲鱼
+      - acs.m.goofish.com
+      - g-acs.m.goofish.com
+      - acs.m.taobao.com               # 仅用于 mtop.taobao.idle.home.welcome 开屏；淘宝 App 若异常可删
+      # 美团 / 美团外卖（wmapi.meituan.com 有意不加入，见上方说明）
+      - img.meituan.net
+      - s3plus.meituan.net
+      - flowplus.meituan.net
+      - "p*.meituan.net"               # 开屏图片 CDN（p0 / p1 ...）
+      # 腾讯视频
+      - vv.video.qq.com
+      # 小红书
+      - edith.xiaohongshu.com
+      - www.xiaohongshu.com
+      - ci.xiaohongshu.com
+      - rec.xiaohongshu.com
+      - so.xiaohongshu.com
+      - edith.rnote.com
+      - www.rnote.com
+      - ci.rnote.com
+      - rec.rnote.com
+      - so.rnote.com
+      # 哔哩哔哩（gRPC 需 HTTP/2 MITM）
+      - grpc.biliapi.net
+      - app.bilibili.com
+      - api.bilibili.com
+      - api.live.bilibili.com
+      - line3-h5-mobile-api.biligame.com
+      # 高德地图（不用 *.amap.com 通配，避免解密地图瓦片 / 定位接口）
+      - m5.amap.com
+      - m5-zb.amap.com
+      - info.amap.com
+      - oss.amap.com
+      - sns.amap.com
+      - ai.amap.com
+      - optimus-ads.amap.com
+      # 盒马（acs.m.taobao.com 已在闲鱼段）
+      - acs-m.freshippo.com
+      # 京东
+      - api.m.jd.com
+      # 中国移动（含广东 / 山东 / 江苏分省接口）
+      - client.app.coc.10086.cn
+      - clientaccess.10086.cn
+      - app.10086.cn
+      - gd.10086.cn
+      - m.sd.10086.cn
+      - wap.js.10086.cn
+      # 虎牙直播
+      - cdn.wup.huya.com
+      - cdnfile1.msstatic.com
+      - live-ads.huya.com
+      # 斗鱼直播
+      - rtbapi.douyucdn.cn
+      - apiv2.douyucdn.cn
+      - venus.douyucdn.cn
+      - capi.douyucdn.cn
+      - staticlive.douyucdn.cn
+      - douyucdn.cn
